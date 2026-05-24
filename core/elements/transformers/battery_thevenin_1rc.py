@@ -22,7 +22,7 @@ class BatteryThevenin1RC(Transformator):
     """
     Модель аккумулятора Тевенина 1-RC с гистерезисом и температурной зависимостью.
 
-    Входы:
+    Входы (задаются через set_input и попадают в _collected_inputs):
         - 'current'     : ток нагрузки (А), положительный при разряде.
         - 'temperature' : температура (°C).
 
@@ -85,10 +85,6 @@ class BatteryThevenin1RC(Transformator):
         self.param_tables = param_tables if param_tables is not None else {}
         self.use_tables = bool(self.param_tables)
 
-        # Текущие значения входов
-        self.current_input = 0.0
-        self.temperature_input = 25.0
-
     def _default_ocv(self, soc: float) -> float:
         """Вычисляет OCV по полиному 5-й степени."""
         return sum(c * (soc ** i) for i, c in enumerate(self.ocv_coeffs))
@@ -148,17 +144,15 @@ class BatteryThevenin1RC(Transformator):
 
         return self.h + s_i
 
-    def solve_frame(self) -> None:
-        # Получаем входы
-        current = self._get_input('current', tail_len=1)
+    def _solve_frame(self) -> None:
+        # Получаем данные из собранных входов
+        current = self._collected_inputs.get('current')
         if current is None:
             current = 0.0
-        self.current_input = current
 
-        temperature = self._get_input('temperature', tail_len=1)
+        temperature = self._collected_inputs.get('temperature')
         if temperature is None:
             temperature = 25.0
-        self.temperature_input = temperature
 
         # Обновляем параметры по текущему SOC и температуре
         self._update_params_from_tables(self.soc, temperature)

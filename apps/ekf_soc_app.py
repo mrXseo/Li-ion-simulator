@@ -22,17 +22,18 @@ class EKFSOCApp(BaseSimulationApp):
 
     def setup_simulation(self):
         self.sim_setup : EKFSimulationSetup = \
-            AppContext.WithContext(self, EKFSimulationSetup, "simulation_setup", load_settings=False)\
-        (
-            engine= self.engine,
-            current_mode='constant',
-            current_value=1.0,
-            temperature_value=25.0,
-            battery_params={'capacity_nom': 5.0, 'initial_soc': 1.0},
-            noise_sigma=0.01,
-            #ekf_params={'R': 1e-3, 'Q': [[1e-14, 0], [0, 1e-14]]},
-            records_path = self.records_path, 
-        )
+            AppContext.WithContext(self, EKFSimulationSetup, "simulation_setup", load_settings=True)(
+                engine=self.engine,
+                current_mode='constant',
+                current_value=1.0,
+                temperature_value=25.0,
+                battery_params={'capacity_nom': 5.0, 'initial_soc': 1.0},
+                voltage_noise_sigma=0.0,
+                current_noise_sigma=0.0,
+                temp_noise_sigma=0.0,
+                # ekf_params={'R': 1e-3, 'Q': [[1e-14, 0], [0, 1e-14]]},  # теперь это берётся из JSON
+                records_path=self.records_path,
+            )
 
         self.sim_setup.build()
 

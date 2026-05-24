@@ -22,6 +22,8 @@ class AppContext:
 
     app: Optional[BaseSimulationApp] = None
     _registry: List[Tuple[Any, str, bool]] = []   # (объект, config_path, load_settings)
+    is_force_reboot_docs = False
+    is_force_reboot_settings = False
 
     @classmethod
     def init(cls, app: BaseSimulationApp) -> None:
@@ -64,12 +66,40 @@ class AppContext:
             if load_settings:
                 # 3. Загружаем настройки из файла, если он есть
                 config_file = cls.app.settings_path / f"{child_path}.json"
+                config_file_annotation = cls.app.settings_path / f"{child_path}[docs].md"
                 if config_file.exists():
+                    file_params = dict()
                     with open(config_file, 'r', encoding='utf-8') as f:
-                        file_params = json.load(f)
+                        content = f.read()
+                        if content:
+                            file_params = json.loads(content)
                     # Параметры из файла перезаписывают явно переданные
                     kwargs.update(file_params)
+                else:
+                    with open(config_file, 'w', encoding='utf-8') as f:
+                        pass
+                if (not config_file_annotation.exists() ) or cls.is_force_reboot_docs:
+                    if cls.is_force_reboot_docs:
+                        print(f"Документация настроек [{config_file_annotation}] принудительно обновлена")
+                    with open(config_file_annotation, 'w', encoding='utf-8') as f:
+                        f.write("### internal code annotations:\n")
+                        st_annotations : List[str] = list()
+                        st_defaults_counters = len(target_cls.__init__.__defaults__) - len(target_cls.__init__.__annotations__)
+                        for name, annot in target_cls.__init__.__annotations__.items():
+                            if name == "return":
+                                continue
+                            st_annotations.append(f"*\t name : **{name}**\n\n")
+                            st_annotations.append(f"\t typing : **{annot}**\n\n")
+                            if st_defaults_counters >= 0:
+                                st_annotations.append(f"\t default : **{target_cls.__init__.__defaults__[st_defaults_counters]}**\n\n")
+                            st_defaults_counters += 1
+                            st_annotations.append("\n")
 
+                        f.writelines(st_annotations)
+                        if target_cls.__init__.__doc__:
+                            f.write("### internal code doc:\n")
+                            f.write(target_cls.__init__.__doc__)
+                    
             # 4. Создаём экземпляр
             obj = target_cls(**kwargs)
 

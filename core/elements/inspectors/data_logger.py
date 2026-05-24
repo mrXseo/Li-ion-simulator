@@ -24,6 +24,7 @@ class DataLogger(Inspector):
         self.records_path = records_path
         self.filename = filename or f"rec_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         self.filepath = self.records_path / self.filename
+        self.filepath.parent.mkdir(parents=True, exist_ok=True)  # создаёт подпапки
         self.targets = targets
         self.auto_flush = auto_flush
         self.flush_interval = flush_interval
@@ -78,7 +79,7 @@ class DataLogger(Inspector):
         self._saved_rows += len(self._buffer)
         self._buffer.clear()
 
-    def solve_frame(self):
+    def _solve_frame(self):
         if not self.enabled:
             return
 
@@ -86,7 +87,8 @@ class DataLogger(Inspector):
         row = {'frame': self._frame_counter}
 
         for alias, obj in self.targets.items():
-            res = obj.current_result
+            # используем штатный метод движка, чтобы получить актуальный результат
+            res = obj.get_frame_result(tail_len=1)
             if res:
                 for key, value in res.items():
                     col_name = f"{alias}.{key}"

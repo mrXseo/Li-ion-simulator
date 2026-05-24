@@ -5,7 +5,8 @@
 
 Предоставляет интерфейс пошагового выполнения (solve_frame), хранение
 ограниченной очереди результатов, механизм синхронизированного доступа
-к ним через движок, а также унифицированную систему связывания входов.
+к ним через движок, а также унифицированную систему связывания входов
+с автоматическим временны́м выравниванием.
 """
 
 from __future__ import annotations
@@ -17,12 +18,20 @@ if TYPE_CHECKING:
     from .simulation_engine import SimulationEngine
 
 
+# --------------------------------------------------------------
+# Исключение для управления ретроспективой
+# --------------------------------------------------------------
+class RetrospectiveAdjustment(Exception):
+    """Сигнализирует, что объект не смог получить данные из-за недостаточной истории источника."""
+    pass
+
+
 class SimulationObject:
     """
     Базовый класс для любого компонента симуляции (модель, фильтр, шум и т.д.).
 
     Каждый объект автоматически регистрируется в движке при создании.
-    Объект обязан переопределить методы solve_frame() и reset_state().
+    Объект обязан переопределить методы _solve_frame() и reset_state().
 
     Атрибуты:
         simulation_engine (SimulationEngine): ссылка на движок симуляции.
@@ -30,20 +39,10 @@ class SimulationObject:
         frame_list_size (int): максимальное количество сохраняемых фреймов.
         _results_history (deque[Dict[str, Any]]): очередь результатов (FIFO).
         _input_rules (Dict[str, Tuple[int, str]]): правила получения входных данных.
+        _retrospective_shift (int): личное смещение объекта во времени (в кадрах).
     """
 
     def __init__(self, simulation_engine: SimulationEngine, frame_list_size: int = 1000, **other_kwargs) -> None:
-        """
-        Инициализирует объект симуляции и регистрирует его в движке.
-
-        Args:
-            simulation_engine (SimulationEngine): экземпляр движка.
-            frame_list_size (int): максимальный размер очереди истории.
-                                   Должен быть положительным.
-
-        Raises:
-            ValueError: если frame_list_size <= 0.
-        """
         self.simulation_engine: SimulationEngine = simulation_engine
         self.simulation_id: int = self.simulation_engine.register(self)
 
@@ -53,62 +52,91 @@ class SimulationObject:
         self._results_history: deque[Dict[str, Any]] = deque(maxlen=frame_list_size)
 
         # Правила получения входов: input_key -> (source_id, output_key)
-        self._input_rules: Dict[str, Tuple[int, str]] = {}
+        self._input_rules: Dict[str, Tuple[int, str]] = dict()
+        self._collected_inputs: Dict[str, Any] = dict()
 
-    def solve_frame(self) -> None:
+        # Релятивистское личное смещение (0 – настоящее, 1 – один кадр в прошлом, и т.д.)
+        self._retrospective_shift: int = 0
+
+    @property
+    def retrospective_shift(self):
+        return self._retrospective_shift
+
+    # --------------------------------------------------------------
+    # Переопределяемые методы
+    # --------------------------------------------------------------
+    def _solve_frame(self) -> None:
         """
-        Выполняет один шаг (фрейм) симуляции.
+        Выполняет один шаг симуляции (собственная логика объекта).
 
-        Должен быть переопределён в наследниках.
-        Внутри метода необходимо:
-            - Произвести все вычисления на основе текущего состояния и,
-              при необходимости, данных других объектов (через
-              self._get_input() или self.get_frame_result()).
-            - Вызвать self._push_result() с результатами фрейма в виде словаря.
-
-        Raises:
-            NotImplementedError: если метод не переопределён.
+        Внутри можно использовать self._collected_inputs для доступа к уже полученным данным.
+        Обязан вызвать self._push_result() с результатами фрейма.
         """
-        raise NotImplementedError("Subclasses must implement solve_frame()")
+        raise NotImplementedError("Subclasses must implement _solve_frame()")
 
     def reset_state(self) -> None:
         """
         Сбрасывает внутреннее состояние объекта (но не историю).
-
         Должен быть переопределён в наследниках.
-        Вызывается движком при глобальном сбросе.
-
-        Raises:
-            NotImplementedError: если метод не переопределён.
         """
         raise NotImplementedError("Subclasses must implement reset_state()")
 
-    def _push_result(self, result: Dict[str, Any]) -> None:
-        """
-        Сохраняет результат текущего фрейма в историю.
+    # --------------------------------------------------------------
+    # Механизм сбора входных данных (с автоматической ретроспективой)
+    # --------------------------------------------------------------
+    def _collect_inputs(self) -> None:
+        """Собирает все входы согласно _input_rules. При неудаче выбрасывает RetrospectiveAdjustment."""
+        for input_key in self._input_rules:
+            self._collected_inputs[input_key] = self._get_input(input_key, 1)
 
-        Args:
-            result (Dict[str, Any]): словарь с данными фрейма.
+    def _destruct_inputs(self) -> None:
+        """Очищает собранные входы после использования."""
+        self._collected_inputs.clear()
+
+    def _get_input(self, input_key: str, tail_len: int = 1) -> Optional[Any]:
         """
+        Получает значение входа по заданному правилу с учётом временны́х сдвигов.
+
+        Если объекты ещё не имеют ретроспективных сдвигов (retro==0),
+        используется старый механизм движка (с коррекцией порядка выполнения).
+        Иначе применяется релятивистская формула:
+            effective_tail = max(1, 1 + self._retrospective_shift - source._retrospective_shift)
+        """
+        rule = self._input_rules.get(input_key)
+        if rule is None:
+            warnings.warn(f"Input rule for '{input_key}' not set in {self.__class__.__name__}")
+            return None
+        source_id, output_key = rule
+        source_obj = self.simulation_engine._objects.get(source_id)
+        if source_obj is None:
+            return None
+
+        # Определяем, нужно ли использовать ретроспективную формулу
+        use_retro = (self._retrospective_shift > 0) or (source_obj._retrospective_shift > 0)
+
+        if not use_retro:
+            # --- Старый механизм: движок гарантирует атомарность ---
+            result = self.simulation_engine.get_result(source_id, tail_len)
+            if result is None:
+                raise RetrospectiveAdjustment()
+            return result.get(output_key)
+        else:
+            # --- Ретроспективная формула ---
+            effective_tail = max(1, tail_len + self._retrospective_shift - source_obj._retrospective_shift)
+            result = source_obj._get_frame_result(effective_tail)
+            if result is None:
+                raise RetrospectiveAdjustment()
+            return result.get(output_key)
+
+    # --------------------------------------------------------------
+    # Управление историей
+    # --------------------------------------------------------------
+    def _push_result(self, result: Dict[str, Any]) -> None:
+        """Сохраняет результат текущего фрейма в историю."""
         self._results_history.append(result)
 
     def get_frame_result(self, tail_len: int = 1) -> Optional[Dict[str, Any]]:
-        """
-        Публичный метод получения результата другого объекта или своего
-        с автоматической синхронизацией времени через движок.
-
-        В отличие от прямого обращения к истории, этот метод учитывает
-        порядок выполнения объектов и корректирует tail_len, чтобы избежать
-        использования ещё не вычисленных данных текущего фрейма.
-
-        Args:
-            tail_len (int): количество фреймов от конца очереди
-                            (1 – последний, 2 – предпоследний, …).
-
-        Returns:
-            Optional[Dict[str, Any]]: словарь результата или None, если
-            запрошенный фрейм отсутствует.
-        """
+        """Публичный доступ к результатам (через движок, с коррекцией порядка)."""
         return self.simulation_engine.get_result(self.simulation_id, tail_len)
 
     @property
@@ -116,19 +144,7 @@ class SimulationObject:
         return dict()
 
     def _get_frame_result(self, tail_len: int = 1) -> Optional[Dict[str, Any]]:
-        """
-        Внутренний метод прямого доступа к истории (без коррекции).
-
-        Используется только движком для получения данных из другого объекта.
-        Не предназначен для вызова из пользовательского кода.
-
-        Args:
-            tail_len (int): количество фреймов от конца очереди (1 – последний).
-
-        Returns:
-            Optional[Dict[str, Any]]: результат или None, если индекс выходит
-            за границы истории.
-        """
+        """Внутренний прямой доступ к истории (без коррекции)."""
         if tail_len < 1:
             return self.default
         idx = -tail_len
@@ -137,90 +153,50 @@ class SimulationObject:
         return self._results_history[idx]
 
     def clear_history(self) -> None:
-        """Полностью очищает историю результатов объекта."""
         self._results_history.clear()
 
     def get_all_history(self) -> List[Dict[str, Any]]:
-        """
-        Возвращает всю сохранённую историю результатов (от старых к новым).
-        """
         return list(self._results_history)
 
     @property
     def current_result(self) -> Optional[Dict[str, Any]]:
-        """
-        Optional[Dict[str, Any]]: результат последнего завершённого фрейма
-        (синоним get_frame_result(1)).
-        """
         return self.get_frame_result(1)
 
     @property
     def history_length(self) -> int:
-        """
-        int: текущее количество сохранённых фреймов в истории.
-        """
         return len(self._results_history)
 
     # --------------------------------------------------------------
-    # Новый механизм явного связывания входов (для Transformator'ов)
+    # Публичный интерфейс связывания входов и выполнения шага
     # --------------------------------------------------------------
-
     def set_input(self, input_key: str, source_id: int, output_key: str) -> None:
-        """
-        Устанавливает правило получения входных данных от другого объекта.
-
-        Args:
-            input_key (str): имя, под которым вход будет доступен в объекте.
-            source_id (int): ID объекта-источника.
-            output_key (str): ключ в словаре результатов источника.
-        """
+        """Устанавливает правило получения входных данных."""
         self._input_rules[input_key] = (source_id, output_key)
 
-    def _get_input(self, input_key: str, tail_len: int = 1) -> Optional[Any]:
+    def solve_frame(self) -> None:
         """
-        Получает значение входа по заданному правилу.
-
-        Args:
-            input_key (str): имя входа.
-            tail_len (int): смещение от конца истории источника (1 – последний фрейм).
-
-        Returns:
-            Optional[Any]: значение из словаря источника по ключу output_key,
-                           или None, если данных нет.
+        Главный метод, вызываемый движком.
+        Пытается выполнить кадр; при неудаче (нехватка истории источников)
+        увеличивает личную ретроспективу и пропускает кадр.
         """
-        rule = self._input_rules.get(input_key)
-        if rule is None:
-            warnings.warn(f"Input rule for '{input_key}' not set in {self.__class__.__name__}")
-            return None
-        source_id, output_key = rule
-        result = self.simulation_engine.get_result(source_id, tail_len)
-        if result is None:
-            return None
-        return result.get(output_key)
+        try:
+            self._collect_inputs()
+            self._solve_frame()
+        except RetrospectiveAdjustment:
+            # Не все данные доступны – сдвигаемся на кадр в прошлое и пропускаем
+            self._retrospective_shift += 1
+        finally:
+            self._destruct_inputs()
 
 
 # --------------------------------------------------------------
-# Маркерные классы для классификации объектов по роли
+# Маркерные классы
 # --------------------------------------------------------------
-
 class Generator(SimulationObject):
-    """
-    Объект, который только генерирует данные, не потребляя входов от других объектов.
-    """
     pass
-
 
 class Transformator(SimulationObject):
-    """
-    Объект, принимающий входы от других объектов, преобразующий их и выдающий результаты.
-    Обычно использует set_input() и _get_input() для получения данных.
-    """
     pass
 
-
 class Inspector(SimulationObject):
-    """
-    Объект, который только читает данные других объектов для анализа/логирования,
-    не создавая выходов, используемых в симуляции.
-    """
     pass

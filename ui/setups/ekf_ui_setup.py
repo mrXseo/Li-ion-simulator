@@ -106,7 +106,7 @@ class EKFUISetup(BlankSetup):
         current_gen = self.sim_setup.current_gen
         temp_gen = self.sim_setup.temp_gen
         ekf = self.sim_setup.ekf
-        noise_adder = self.sim_setup.noise_adder
+        voltage_noise_adder = self.sim_setup.voltage_adder
         voltage_noise_gen = self.sim_setup.voltage_noise_gen
 
         # ----- Графики (создаём как объекты HistoryPlotWidget) -----
@@ -115,9 +115,7 @@ class EKFUISetup(BlankSetup):
             simulation_object=battery,
             data_keys={'soc': 'True SOC'},
             title="True State of Charge",
-            height=250,
-            width=500,
-            window_size=200,
+            height=250, width=500, window_size=200,
             y_limits=(0.0, 1.0)
         )
         true_soc_node = widget_to_node("TrueSOCPlot", true_soc_plot)
@@ -127,9 +125,7 @@ class EKFUISetup(BlankSetup):
             simulation_object=ekf,
             data_keys={'soc_est': 'EKF SOC'},
             title="EKF SOC Estimate",
-            height=250,
-            width=500,
-            window_size=200,
+            height=250, width=500, window_size=200,
             y_limits=(0.0, 1.0)
         )
         ekf_soc_node = widget_to_node("EKFSOCPlot", ekf_soc_plot)
@@ -139,22 +135,17 @@ class EKFUISetup(BlankSetup):
             simulation_object=ekf,
             data_keys={'soc_error': 'SOC Error'},
             title="SOC Estimation Error",
-            height=250,
-            width=500,
-            window_size=200,
+            height=250, width=500, window_size=200,
             y_limits=(-1.0, 1.0)
         )
         error_node = widget_to_node("ErrorPlot", error_plot)
 
-        # Covariance plot
         cov_plot = HistoryPlotWidget(
             tag=f"{self.tag}_cov_plot",
             simulation_object=ekf,
             data_keys={'P00': 'P00', 'P11': 'P11'},
             title="Covariance Diagonal Elements",
-            height=250,
-            width=500,
-            window_size=200
+            height=250, width=500, window_size=200
         )
         cov_node = widget_to_node("CovPlot", cov_plot)
 
@@ -163,22 +154,16 @@ class EKFUISetup(BlankSetup):
             simulation_object=battery,
             data_keys={'voltage_terminal': 'True Voltage'},
             title="Battery Voltage",
-            height=200,
-            width=500,
-            window_size=200,
-            y_limits=(0, 6.0)
+            height=200, width=500, window_size=200, y_limits=(0, 6.0)
         )
         voltage_true_node = widget_to_node("TrueVoltagePlot", voltage_true_plot)
 
         voltage_meas_plot = HistoryPlotWidget(
             tag=f"{self.tag}_voltage_meas",
-            simulation_object=noise_adder,
+            simulation_object=voltage_noise_adder,
             data_keys={'V_measured': 'Measured Voltage'},
             title="Measured Voltage",
-            height=200,
-            width=500,
-            window_size=200,
-            y_limits=(0, 6.0)
+            height=200, width=500, window_size=200, y_limits=(0, 6.0)
         )
         voltage_meas_node = widget_to_node("MeasVoltagePlot", voltage_meas_plot)
 
@@ -187,15 +172,15 @@ class EKFUISetup(BlankSetup):
             simulation_object=ekf,
             data_keys={'innovation': 'Innovation'},
             title="EKF Innovation",
-            height=150,
-            width=500,
-            window_size=200
+            height=150, width=500, window_size=200
         )
         innov_node = widget_to_node("InnovPlot", innov_plot)
 
-        # ----- Элементы управления (виджеты) -----
-        top_controls = []
+        # ----- Live Parameters (с перенесённым управлением) -----
+        from .live_parameters_setup import LiveParametersSetup
 
+        # Виджеты управления, которые теперь будут внутри LiveParameters
+        current_control = None
         if isinstance(current_gen, ConstantGenerator):
             current_control = ParameterControlWidget(
                 tag=f"{self.tag}_current_ctrl",
@@ -210,37 +195,24 @@ class EKFUISetup(BlankSetup):
                 },
                 width=250
             )
-            top_controls.append(widget_to_node("CurrentControl", current_control))
-        elif isinstance(current_gen, CyclicProfileGenerator):
-            def generate_new_profile():
-                import random
-                new_profile = [random.uniform(-2.0, 2.0) for _ in range(20)]
-                self.sim_setup.set_current_profile(new_profile)
-            gen_btn = UINode(
-                name="GenerateProfileBtn",
-                tree_type=TreeTypes.DPG_SIMPLE_COMPONENT,
-                init_func=dpg.add_button,
-                label="Generate Random Profile",
-                callback=generate_new_profile
+        
+        temp_control = None
+        if isinstance(temp_gen, ConstantGenerator):
+            temp_control = ParameterControlWidget(
+                tag=f"{self.tag}_temp_ctrl",
+                simulation_object=temp_gen,
+                param_config={
+                    'value': {
+                        'type': 'float',
+                        'range': (-10.0, 60.0),
+                        'default': temp_gen.value,
+                        'label': 'Temperature (C)'
+                    }
+                },
+                width=250
             )
-            top_controls.append(gen_btn)
 
-        temp_control = ParameterControlWidget(
-            tag=f"{self.tag}_temp_ctrl",
-            simulation_object=temp_gen,
-            param_config={
-                'value': {
-                    'type': 'float',
-                    'range': (-10.0, 60.0),
-                    'default': temp_gen.value,
-                    'label': 'Temperature (°C)'
-                }
-            },
-            width=250
-        )
-        top_controls.append(widget_to_node("TempControl", temp_control))
-
-        noise_control = ParameterControlWidget(
+        voltage_noise_control = ParameterControlWidget(
             tag=f"{self.tag}_noise_ctrl",
             simulation_object=voltage_noise_gen,
             param_config={
@@ -253,12 +225,62 @@ class EKFUISetup(BlankSetup):
             },
             width=250
         )
-        top_controls.append(widget_to_node("NoiseControl", noise_control))
 
-        # Группа основных настроек (вертикальная)
-        top_settings_group = self._make_group("TopSettings", horizontal=False, children=top_controls)
+        # Слайдер шума тока
+        current_noise_control = None
+        if hasattr(self.sim_setup, 'current_noise_gen') and self.sim_setup.current_noise_gen:
+            current_noise_control = ParameterControlWidget(
+                tag=f"{self.tag}_current_noise_ctrl",
+                simulation_object=self.sim_setup.current_noise_gen,
+                param_config={
+                    'sigma': {
+                        'type': 'float',
+                        'range': (0.0, 0.1),
+                        'default': self.sim_setup.current_noise_gen.sigma,
+                        'label': 'I Noise Sigma (A)'
+                    }
+                },
+                width=250
+            )
 
-        # Группа настроек EKF
+        # Слайдер шума температуры
+        temp_noise_control = None
+        if hasattr(self.sim_setup, 'temp_noise_gen') and self.sim_setup.temp_noise_gen:
+            temp_noise_control = ParameterControlWidget(
+                tag=f"{self.tag}_temp_noise_ctrl",
+                simulation_object=self.sim_setup.temp_noise_gen,
+                param_config={
+                    'sigma': {
+                        'type': 'float',
+                        'range': (0.0, 10.0),
+                        'default': self.sim_setup.temp_noise_gen.sigma,
+                        'label': 'T Noise Sigma (C)'
+                    }
+                },
+                width=250
+            )
+
+        live_setup = LiveParametersSetup(
+            setup_tag=f"{self.tag}_live",
+            battery=battery,
+            current_gen=current_gen,
+            voltage_adder=voltage_noise_adder,
+            temp_gen=temp_gen,
+            ekf=ekf,
+            current_control_widget=current_control,
+            temp_control_widget=temp_control,
+            voltage_noise_control_widget=voltage_noise_control,
+            # Новые параметры
+            current_adder=self.sim_setup.current_adder,
+            temp_adder=self.sim_setup.temp_adder,
+            current_noise_gen=self.sim_setup.current_noise_gen,
+            temp_noise_gen=self.sim_setup.temp_noise_gen,
+            temp_noise_control_widget=temp_noise_control,   # слайдер шума T
+            current_noise_control_widget=current_noise_control  # слайдер шума I
+        )
+        live_node = live_setup.get_setup()
+
+        # ----- Элементы управления EKF (ковариации) -----
         ekf_controls = []
         ekf_param_configs = [
             ('R', 'Meas. noise R', ekf.R_val, (0, 1)),
@@ -288,39 +310,43 @@ class EKFUISetup(BlankSetup):
             ekf_controls.append(widget_to_node(f"EKF_{name}_Control", widget))
         ekf_settings_group = self._make_group("EKFSettings", horizontal=False, children=ekf_controls)
 
-        # ----- Сборка первой строки: TabBar с двумя вкладками -----
-        # Вкладка "models settings"
-        group_row1 = self._make_group("GroupRow1", horizontal=True, children=[true_soc_node, top_settings_group])
-        group_row2 = self._make_group("GroupRow2", horizontal=True, children=[ekf_soc_node, ekf_settings_group])
+        # ----- Компоновка строк -----
+        # Строка 1: True SOC (слева) | Live Parameters (справа)
+        group_row1 = self._make_group("GroupRow1", horizontal=True, children=[
+            true_soc_node,
+            live_node
+        ])
+
+        # Строка 2: EKF SOC (слева) | EKF Settings (справа)
+        group_row2 = self._make_group("GroupRow2", horizontal=True, children=[
+            ekf_soc_node,
+            ekf_settings_group
+        ])
+
+        # ----- Сборка первой строки: TabBar с вкладками -----
         models_tab_content = self._make_group("ModelsTabContent", horizontal=False, children=[group_row1, group_row2])
         models_tab = self._make_tab("TabModels", "Models settings", children=[models_tab_content])
 
-        # Вкладка "error statistic"
         error_tab_content = self._make_child_window("ErrorChildWin", children=[error_node])
         error_tab = self._make_tab("TabError", "Error statistic", children=[error_tab_content])
 
-        # Вкладка "error statistic"
         cov_tab_content = self._make_child_window("CovChildWin", children=[cov_node])
         cov_tab = self._make_tab("TabCov", "Covariance", children=[cov_tab_content])
 
-        # TabBar первой строки
         tab_bar_row1 = self._make_tab_bar("TabBarRow1", children=[models_tab, error_tab, cov_tab])
-        child_win_row1 = self._make_child_window("ChildWinRow1", children=[tab_bar_row1], height = 600)
+        child_win_row1 = self._make_child_window("ChildWinRow1", children=[tab_bar_row1], height=600)
         row1 = self._make_group("EKFExp_row1", horizontal=True, children=[child_win_row1])
 
-        # ----- Сборка второй строки: заголовок + TabBar с графиками -----
+        # ----- Вторая строка: графики Other plots -----
         header_text = self._make_text_header("HeaderOtherPlots", "Other plots")
         plots_tab_bar = self._make_tab_bar("PlotsTabBar", children=[
             self._make_tab("TabTrueV", "True voltage", children=[voltage_true_node]),
             self._make_tab("TabMeasV", "Meas voltage", children=[voltage_meas_node]),
             self._make_tab("TabInnov", "EKF innovation", children=[innov_node])
         ])
-        # Вертикальная группа для заголовка и TabBar
         row2_content = self._make_group("Row2Content", horizontal=False, children=[header_text, plots_tab_bar])
         child_win_row2 = self._make_child_window("ChildWinRow2", children=[row2_content])
         row2 = self._make_group("EKFExp_row2", horizontal=True, children=[child_win_row2])
 
-        # ----- Главная группа -----
         main_group = self._make_group("EKFExp_main", horizontal=False, children=[row1, row2])
-
         return main_group

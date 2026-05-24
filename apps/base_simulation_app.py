@@ -11,12 +11,13 @@ from typing import List, Callable, Optional
 from core.simulation_base.simulation_engine import SimulationEngine
 from ui.tools.tree import UINode, TreeParser
 
-from.utils.config import AppContext
+from .utils.config import AppContext
 
 import time
 from collections import deque
 import json
 from pathlib import Path
+import shutil
 
 class BaseSimulationApp:
     """
@@ -33,22 +34,21 @@ class BaseSimulationApp:
         self.is_running = False
         self.root_node: Optional[UINode] = None
         self.update_funcs: List[Callable] = []
-        self.ui_refresh_interval = 0.033  # ~30 fps
         self._load_history_in_seconds = 10.0
-        self._load_history_size = round(self._load_history_in_seconds/self.ui_refresh_interval)
-        self._load_history = deque(maxlen=self._load_history_size)  # храним последние 200 значений нагрузки
+        self._load_history_size = round(self._load_history_in_seconds / self.ui_refresh_interval)
+        self._load_history = deque(maxlen=self._load_history_size)
         self._last_ui_time = time.time()
         self._pending_restart = False
         self._autostart = False
         self._duration_frames = 0
-    
+
     def notify_restart_required(self):
         self._pending_restart = True
 
     @property
     def app_name(self):
         raise NotImplementedError("forget set app name")
-    
+
     @property
     def env_path(self) -> Path:
         return Path(__file__).parent.parent / "envs" / self.app_name
@@ -72,7 +72,7 @@ class BaseSimulationApp:
     @property
     def main_settings_file(self) -> Path:
         return self.env_path / "settings.json"
-    
+
     def setup_environment(self) -> None:
         """Создаёт структуру папок окружения, если они не существуют."""
         self.env_path.mkdir(parents=True, exist_ok=True)
@@ -87,18 +87,34 @@ class BaseSimulationApp:
             return {}
         with open(self.main_settings_file, 'r', encoding='utf-8') as f:
             return json.load(f)
-    
-    def _apply_main_settings(self, data : dict):
-        self.simulation_speed = data.get('speed', 1.0)
-        self.engine.dt = data.get('dt', 1.0)
-        self._autostart = data.get('autostart', False)
-        self._duration_frames = data.get('duration_frames', 0)
 
     def save_settings(self, data: dict) -> None:
         """Сохраняет словарь в settings.json."""
         self.main_settings_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.main_settings_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def _apply_main_settings(self, data: dict):
+        self.simulation_speed = data.get('speed', 1.0)
+        self.engine.dt = data.get('dt', 1.0)
+        self._autostart = data.get('autostart', False)
+        self._duration_frames = data.get('duration_frames', 0)
+
+    def apply_scenario(self, scenario_name: str) -> None:
+        """
+        Копирует все JSON-файлы из папки сценария в рабочую папку settings/,
+        а также заменяет корневой settings.json, если он есть в сценарии.
+        """
+        scenario_dir = self.scenarios_path / scenario_name
+        if not scenario_dir.exists():
+            raise FileNotFoundError(f"Scenario folder not found: {scenario_dir}")
+
+        for file in scenario_dir.iterdir():
+            if file.suffix == '.json':
+                if file.name == 'settings.json':
+                    shutil.copy2(file, self.main_settings_file)
+                else:
+                    shutil.copy2(file, self.settings_path / file.name)
 
     def setup_simulation(self) -> None:
         """Создать и настроить объекты симуляции."""
@@ -172,17 +188,29 @@ class BaseSimulationApp:
 
     def run(self) -> None:
         self.setup_environment()
+
+        # 1. Загружаем главные настройки
         main_settings = self.load_settings()
+
+        # 2. Если активирован сценарий, подменяем файлы и перечитываем главные настройки
+        if main_settings.get('use_scenario', False):
+            scenario_name = main_settings.get('scenario_folder_name', 'default')
+            self.apply_scenario(scenario_name)
+            main_settings = self.load_settings()   # сценарий мог заменить settings.json
+
+        # 3. Применяем настройки симуляции (dt, speed, autostart, duration_frames)
         self._apply_main_settings(main_settings)
+
+        # 4. Инициализируем AppContext (после того как settings/ окончательно сформирована)
+        AppContext.init(self)
+
+        # 5. Графический интерфейс
         dpg.create_context()
-        # Можно добавить тему (опционально)
         with dpg.theme() as global_theme:
             with dpg.theme_component(dpg.mvAll):
                 dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (20, 20, 20))
                 dpg.add_theme_color(dpg.mvThemeCol_TitleBg, (40, 40, 40))
         dpg.bind_theme(global_theme)
-
-        AppContext.init(self)
 
         self.setup_simulation()
         self.setup_ui()
@@ -191,7 +219,7 @@ class BaseSimulationApp:
         if self._autostart:
             dpg.set_frame_callback(dpg.get_frame_count() + 5, lambda: self.start())
 
-        dpg.create_viewport(title=self._get_viewport_title(), width=1000, height=700)
+        dpg.create_viewport(title=self._get_viewport_title(), width=1620, height=780)
         dpg.setup_dearpygui()
         dpg.show_viewport()
         dpg.start_dearpygui()

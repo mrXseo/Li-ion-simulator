@@ -79,7 +79,7 @@ class SettingsUISetup(BlankSetup):
 
     def _build_tree(self, parent_node: UINode):
         """Строит дерево конфигурируемых объектов в левой панели."""
-        # Добавляем корневой узел "App" для главного settings.json
+        # Корневой узел "App"
         app_node = UINode(
             name=f"{self.tag}_tree_app",
             tree_type=TreeTypes.DPG_SIMPLE_COMPONENT,
@@ -89,7 +89,7 @@ class SettingsUISetup(BlankSetup):
         )
         parent_node.add_children(app_node)
 
-        # Добавляем внутрь selectable для настроек приложения
+        # Добавляем selectable для самого приложения
         app_settings_leaf = UINode(
             name=f"{self.tag}_leaf_App",
             tree_type=TreeTypes.DPG_SIMPLE_COMPONENT,
@@ -98,23 +98,37 @@ class SettingsUISetup(BlankSetup):
             callback=self._on_tree_select,
             user_data="App"
         )
-        def capture_leaf_tag(tag):
+        def capture_app_leaf(tag):
             self.tree_leaf_tags.append(tag)
-        app_settings_leaf.build_func = capture_leaf_tag
+        app_settings_leaf.build_func = capture_app_leaf
         app_node.add_children(app_settings_leaf)
 
         # Получаем все объекты с load_settings=True
         objects = AppContext.get_configurable_objects()
-        # Группируем по иерархии
+        # Группируем по иерархии, сохраняя объекты в ключ '__self__'
         tree = {}
         for obj, path in objects:
             parts = path.split('@')
             current = tree
-            for part in parts[:-1]:
-                if part not in current:
-                    current[part] = {}
-                current = current[part]
-            current[parts[-1]] = obj
+            for i, part in enumerate(parts):
+                if i == len(parts) - 1:
+                    # Это конечный узел – объект
+                    if part not in current:
+                        current[part] = {}
+                    # Если там уже есть словарь, просто добавляем ключ __self__
+                    if isinstance(current[part], dict):
+                        current[part]['__self__'] = obj
+                    else:
+                        # Если не словарь – создаём новый с этим объектом
+                        current[part] = {'__self__': obj}
+                else:
+                    # Промежуточный узел
+                    if part not in current:
+                        current[part] = {}
+                    elif not isinstance(current[part], dict):
+                        # Уже был объект – оборачиваем в словарь с __self__
+                        current[part] = {'__self__': current[part]}
+                    current = current[part]
 
         # Рекурсивно создаём узлы
         self._add_tree_nodes(app_node, tree, "")
@@ -122,9 +136,14 @@ class SettingsUISetup(BlankSetup):
     def _add_tree_nodes(self, parent_ui: UINode, tree: dict, current_path: str):
         """Рекурсивно добавляет узлы дерева."""
         for name, value in tree.items():
+            if name == '__self__':
+                continue  # пропускаем ключ __self__, он будет обработан отдельно
+
             path = f"{current_path}@{name}" if current_path else name
+
             if isinstance(value, dict):
-                # Промежуточный узел
+                # Промежуточный узел (имеет дочерние элементы)
+                has_self = '__self__' in value
                 node = UINode(
                     name=f"{self.tag}_tree_{path}",
                     tree_type=TreeTypes.DPG_SIMPLE_COMPONENT,
@@ -133,20 +152,38 @@ class SettingsUISetup(BlankSetup):
                     default_open=True
                 )
                 parent_ui.add_children(node)
-                self._add_tree_nodes(node, value, path)
+
+                # Если есть собственный объект, добавляем selectable "⚙️ Settings"
+                if has_self:
+                    settings_leaf = UINode(
+                        name=f"{self.tag}_leaf_{path}",
+                        tree_type=TreeTypes.DPG_SIMPLE_COMPONENT,
+                        init_func=dpg.add_selectable,
+                        label="⚙️ Settings",
+                        callback=self._on_tree_select,
+                        user_data=path
+                    )
+                    def capture_leaf(tag):
+                        self.tree_leaf_tags.append(tag)
+                    settings_leaf.build_func = capture_leaf
+                    node.add_children(settings_leaf)
+
+                # Рекурсивно добавляем дочерние элементы (кроме __self__)
+                child_dict = {k: v for k, v in value.items() if k != '__self__'}
+                self._add_tree_nodes(node, child_dict, path)
             else:
-                # Лист – объект
+                # Лист – объект без дочерних
                 leaf = UINode(
                     name=f"{self.tag}_leaf_{path}",
                     tree_type=TreeTypes.DPG_SIMPLE_COMPONENT,
                     init_func=dpg.add_selectable,
                     label=name,
-                    callback= self._on_tree_select,
+                    callback=self._on_tree_select,
                     user_data=path
                 )
-                def capture_leaf_tag(tag):
+                def capture_leaf(tag):
                     self.tree_leaf_tags.append(tag)
-                leaf.build_func = capture_leaf_tag
+                leaf.build_func = capture_leaf
                 parent_ui.add_children(leaf)
 
     def _on_tree_select(self, sender, app_data, user_data):

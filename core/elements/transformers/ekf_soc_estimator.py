@@ -149,15 +149,146 @@ class EKFSOCEstimator(Transformator):
             self.R1 = self._interpolate_param('R1', soc, temp)
             self.C1 = self._interpolate_param('C1', soc, temp)
 
-    def solve_frame(self) -> None:
-        # Получение входных данных
-        V_meas = self._get_input('voltage_measured', tail_len=1)
-        I = self._get_input('current', tail_len=1)
+    def _solve_frame(self) -> None:
+        V_meas = self._collected_inputs.get('voltage_measured')
+        I = self._collected_inputs.get('current')
         if V_meas is None or I is None:
             return
 
-        T = self._get_input('temperature', tail_len=1) or 25.0
-        h_dyn = self._get_input('hysteresis_dyn', tail_len=1) or 0.0
+        T = self._collected_inputs.get('temperature', 25.0)
+        h_dyn = self._collected_inputs.get('hysteresis_dyn', 0.0)
+
+        soc, Vc = self.x
+
+        # Обновление параметров модели по текущему SOC и температуре
+        self._update_params_from_tables(soc, T)
+
+        dt = self.simulation_engine.dt
+        Cn = self.capacity_nom * 3600.0  # А·ч -> А·с
+
+        # === Прогноз (predict) ===
+        # Параметры для текущего SOC
+        R1 = self.R1
+        C1 = self.C1
+        tau = R1 * C1 if R1 * C1 > 0 else 1e-12
+        exp_term = np.exp(-dt / tau)
+        alpha = exp_term
+        beta = R1 * (1.0 - alpha)
+
+        # Прогноз состояния
+        x_pred = np.array([
+            soc - (dt / Cn) * I,
+            alpha * Vc + beta * I
+        ])
+        x_pred[0] = np.clip(x_pred[0], 0.0, 1.0)
+
+        # --- Строгая матрица Якоби F ---
+        # Вычисляем производные R1 и C1 по SOC (конечные разности)
+        eps_soc = 1e-4
+        def get_dparam_dSOC(param_name):
+            """Производная параметра по SOC при фиксированной T (конечная разность)."""
+            v_plus = self._interpolate_param(param_name, soc + eps_soc, T)
+            v_minus = self._interpolate_param(param_name, soc - eps_soc, T)
+            return (v_plus - v_minus) / (2.0 * eps_soc)
+
+        dR1_dSOC = get_dparam_dSOC('R1')
+        dC1_dSOC = get_dparam_dSOC('C1')
+
+        # Производные alpha и beta
+        dtau_dSOC = dR1_dSOC * C1 + R1 * dC1_dSOC
+        dalpha_dSOC = alpha * (dt / tau**2) * dtau_dSOC
+        dbeta_dSOC = dR1_dSOC * (1.0 - alpha) - R1 * dalpha_dSOC
+
+        # Элемент F[1,0] (производная Up_next по SOC)
+        F10 = dalpha_dSOC * Vc + dbeta_dSOC * I
+
+        F = np.array([
+            [1.0, 0.0],
+            [F10, alpha]
+        ])
+
+        # Прогноз ковариации со строгой матрицей F
+        P_pred = F @ self.P @ F.T + self.Q
+
+        # === Коррекция (update) ===
+        soc_pred, Vc_pred = x_pred
+
+        # Базовое OCV (зависит только от SOC)
+        ocv = self.ocv_func(soc_pred)
+
+        # Гистерезис (исправленный)
+        if not hasattr(self, 'last_sign'):
+            self.last_sign = 1.0  # начальное предположение
+        if I != 0:
+            self.last_sign = np.sign(I)
+        # Мгновенная составляющая: используем M0 (self.s) * last_sign
+        hyst_instant = -self.s * self.last_sign if self.use_hysteresis else 0.0
+        h_total = h_dyn + hyst_instant
+
+        # Предсказанное напряжение
+        R0 = self.R0  # получено из таблиц
+        V_pred = ocv + h_total - Vc_pred - R0 * I
+
+        # --- Строгий якобиан измерения H ---
+        # dOCV/dSOC
+        dOCV = (self.ocv_func(soc_pred + eps_soc) - self.ocv_func(soc_pred - eps_soc)) / (2.0 * eps_soc)
+        # dR0/dSOC
+        dR0_dSOC = get_dparam_dSOC('R0') if self.use_tables else 0.0
+        H_soc = dOCV - I * dR0_dSOC
+        H = np.array([[H_soc, -1.0]])
+
+        innovation = V_meas - V_pred
+
+        # Защита от экстремальных невязок (опционально, можно убрать если мешает)
+        if abs(innovation) > 1.0:
+            # Пропускаем коррекцию, оставляем предсказанное состояние
+            self.x = x_pred
+            self.P = P_pred
+            K_gain = 0.0
+        else:
+            S = H @ P_pred @ H.T + self.R
+            # Усиление Калмана (2x1), используем псевдообращение на случай численных проблем
+            K = P_pred @ H.T / S
+
+            x_new = x_pred + K.flatten() * innovation
+            x_new[0] = np.clip(x_new[0], 0.0, 1.0)
+
+            # Обновление ковариации по Джозефу для устойчивости
+            I_mat = np.eye(2)
+            P_new = (I_mat - np.outer(K, H)) @ P_pred @ (I_mat - np.outer(K, H)).T + K * self.R * K.T
+            P_new = (P_new + P_new.T) / 2.0
+
+            self.x = x_new
+            self.P = P_new
+            K_gain = float(np.linalg.norm(K))
+
+        # Ошибка оценки
+        true_soc = self._collected_inputs.get('true_soc')
+        soc_error = None
+        if true_soc is not None:
+            soc_error = self.x[0] - true_soc
+
+        result = {
+            'soc_est': self.x[0],
+            'vc_est': self.x[1],
+            'innovation': innovation,
+            'K_gain': K_gain,
+            'soc_error': soc_error,
+            'P00': float(self.P[0, 0]),
+            'P11': float(self.P[1, 1])
+        }
+        self._push_result(result)
+
+    """
+    def _solve_frame(self) -> None:
+        # Получаем данные из собранных входов (уже с корректной ретроспективой)
+        V_meas = self._collected_inputs.get('voltage_measured')
+        I = self._collected_inputs.get('current')
+        if V_meas is None or I is None:
+            return
+
+        T = self._collected_inputs.get('temperature', 25.0)
+        h_dyn = self._collected_inputs.get('hysteresis_dyn', 0.0)
 
         # Текущая оценка состояния
         soc, Vc = self.x
@@ -209,36 +340,46 @@ class EKFSOCEstimator(Transformator):
         H = np.array([[dOCV, -1.0]])
 
         innovation = V_meas - V_pred
-        S = H @ P_pred @ H.T + self.R
-        K = P_pred @ H.T / S  # усиление Калмана (2x1)
 
-        x_new = x_pred + K.flatten() * innovation
-        x_new[0] = np.clip(x_new[0], 0.0, 1.0)
+        # Защита от выбросов (стартовые None и т.д.)
+        if abs(innovation) > 1.0:
+            # Пропускаем коррекцию, оставляем предсказанное состояние
+            self.x = x_pred
+            self.P = P_pred
+            K_gain = 0.0
+        else:
+            S = H @ P_pred @ H.T + self.R
+            K = P_pred @ H.T / S  # усиление Калмана (2x1)
 
-        P_new = (np.eye(2) - np.outer(K, H)) @ P_pred
-        # Симметризация для численной устойчивости
-        P_new = (P_new + P_new.T) / 2.0
+            x_new = x_pred + K.flatten() * innovation
+            x_new[0] = np.clip(x_new[0], 0.0, 1.0)
 
-        self.x = x_new
-        self.P = P_new
+            P_new = (np.eye(2) - np.outer(K, H)) @ P_pred
+            # Симметризация для численной устойчивости
+            P_new = (P_new + P_new.T) / 2.0
+
+            self.x = x_new
+            self.P = P_new
+            K_gain = float(np.linalg.norm(K))
 
         # Ошибка оценки, если есть истинный SOC
-        true_soc = self._get_input('true_soc', tail_len=1)
+        true_soc = self._collected_inputs.get('true_soc')
         soc_error = None
         if true_soc is not None:
-            soc_error = x_new[0] - true_soc
+            soc_error = x_pred[0] - true_soc
 
         result = {
-            'soc_est': x_new[0],
-            'vc_est': x_new[1],
+            'soc_est': x_pred[0],
+            'vc_est': x_pred[1],
             'innovation': innovation,
-            'K_gain': float(np.linalg.norm(K)),
+            'K_gain': K_gain,
             'soc_error': soc_error,
             'P00': float(self.P[0, 0]),
             'P11': float(self.P[1, 1])
         }
         self._push_result(result)
-
+    """
+        
     def reset_state(self) -> None:
         """Сброс оценок фильтра к начальным значениям."""
         self.x = np.array([1.0, 0.0])
@@ -269,7 +410,6 @@ class EKFSOCEstimator(Transformator):
         if 'R' in kwargs:
             self.R = float(kwargs['R'])
         if 'Q00' in kwargs:
-            # Убедимся, что Q – numpy-массив
             if not isinstance(self.Q, np.ndarray):
                 self.Q = np.array(self.Q)
             self.Q[0, 0] = float(kwargs['Q00'])

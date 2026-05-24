@@ -1,4 +1,4 @@
-# core/noise_generator.py
+# core/elements/generators/noise_generator.py
 # -*- coding: utf-8 -*-
 """
 Модуль генератора шума для симуляции датчиков.
@@ -72,7 +72,7 @@ class NoiseGenerator(Generator):
         self.sigma_name = "sigma"
         self.bias_name = "bias"
 
-    def solve_frame(self) -> None:
+    def _solve_frame(self) -> None:
         """
         Генерирует одно значение шума и сохраняет его в историю.
 
@@ -84,8 +84,6 @@ class NoiseGenerator(Generator):
         else:
             # Fallback (никогда не должно сработать из-за проверки в __init__)
             value = 0.0
-
-        frame_idx = len(self._results_history)
 
         self._push_result(
             {self.output_key: value, 

@@ -50,7 +50,7 @@ class ConstantGenerator(Generator):
         """Изменить выдаваемое значение (начиная со следующего фрейма)."""
         self.value = value
 
-    def solve_frame(self) -> None:
+    def _solve_frame(self) -> None:
         # Сохраняем текущее значение
         self._push_result({self.output_key: self.value})
 
