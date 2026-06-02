@@ -1,0 +1,23 @@
+{
+  "current_mode": "cyclic",
+  "current_profile": [
+    1.0, 1.0, 1.0, 1.0, -2.0, -2.0,
+    1.0, 1.0, 1.0, 1.0, -2.0, -2.0
+  ],
+  "current_profile_scale": 18000,
+  "current_linear_change": false,
+  "temperature_mode": "cyclic",
+  "temperature_profile": [
+    35.0, 32.0, 28.0, 23.0, 18.0, 14.0, 10.0, 7.0,
+    5.0, 7.0, 10.0, 14.0, 18.0, 23.0, 28.0, 32.0,
+    35.0, 32.0, 28.0, 23.0, 18.0, 14.0, 10.0, 7.0,
+    5.0, 7.0, 10.0, 14.0, 18.0, 23.0, 28.0, 32.0
+  ],
+  "temperature_profile_scale": 27000,
+  "temperature_linear_change": true,
+  "voltage_noise_sigma": 0.01,
+  "current_noise_sigma": 0.01,
+  "temp_noise_sigma": 0.5,
+  "battery_params": {},
+  "ekf_params": {}
+}

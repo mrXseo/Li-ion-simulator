@@ -1,0 +1,11 @@
+{
+  "current_mode": "constant",
+  "current_value": 1.0,
+  "temperature_mode": "constant",
+  "temperature_value": 25.0,
+  "voltage_noise_sigma": 0.01,
+  "current_noise_sigma": 0.01,
+  "temp_noise_sigma": 0.1,
+  "battery_params": {},
+  "ekf_params": {}
+}

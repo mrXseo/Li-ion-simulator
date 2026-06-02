@@ -1,0 +1,8 @@
+{
+  "use_scenario": true,
+  "scenario_folder_name": "default",
+  "dt": 0.1,
+  "speed": 100.0,
+  "autostart": true,
+  "duration_frames": 180000
+}

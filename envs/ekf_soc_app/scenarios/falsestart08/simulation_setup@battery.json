@@ -1,0 +1,11 @@
+{
+  "capacity_nom": 5.0,
+  "initial_soc": 1.0,
+  "R0": 0.01,
+  "R1": 0.02,
+  "C1": 1000.0,
+  "use_hysteresis": true,
+  "M": 0.02,
+  "gamma": 50.0,
+  "s": 0.5
+}
