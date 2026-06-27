@@ -1,6 +1,6 @@
 {
   "enabled": true,
   "auto_flush": true,
-  "flush_interval": 1000,
-  "filename": "default/record.csv"
+  "flush_interval": 1000.0,
+  "filename": "presentation/record.csv"
 }

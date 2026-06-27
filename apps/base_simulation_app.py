@@ -208,8 +208,49 @@ class BaseSimulationApp:
         dpg.create_context()
         with dpg.theme() as global_theme:
             with dpg.theme_component(dpg.mvAll):
-                dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (20, 20, 20))
-                dpg.add_theme_color(dpg.mvThemeCol_TitleBg, (40, 40, 40))
+                # --- Основные цвета фона и текста ---
+                dpg.add_theme_color(dpg.mvThemeCol_WindowBg, (255, 255, 255))              # чисто белый фон окон
+                dpg.add_theme_color(dpg.mvThemeCol_TitleBg, (230, 240, 250))              # светло-голубой заголовок
+                dpg.add_theme_color(dpg.mvThemeCol_TitleBgActive, (200, 220, 240))        # активный заголовок
+                dpg.add_theme_color(dpg.mvThemeCol_Text, (40, 40, 50))                    # тёмно-синий, почти чёрный
+
+                # --- Панели и группы ---
+                dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (248, 250, 252))              # очень светлый фон для групп
+                dpg.add_theme_color(dpg.mvThemeCol_PopupBg, (255, 255, 255))              # белый фон всплывающих окон
+                dpg.add_theme_color(dpg.mvThemeCol_MenuBarBg, (240, 245, 250))            # фон меню
+
+                # --- Кнопки ---
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (235, 240, 245))               # кнопка
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (215, 225, 235))        # наведение
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (195, 210, 225))         # нажатие
+
+                # --- Поля ввода, слайдеры ---
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (245, 247, 250))              # поле ввода
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (235, 240, 245))
+                dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (225, 230, 240))
+
+                # --- Слайдеры и скроллбары ---
+                dpg.add_theme_color(dpg.mvThemeCol_ScrollbarBg, (240, 242, 245))
+                dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, (200, 210, 220))
+                dpg.add_theme_color(dpg.mvThemeCol_SliderGrab, (180, 200, 220))
+                dpg.add_theme_color(dpg.mvThemeCol_SliderGrabActive, (160, 180, 200))
+
+                # --- Вкладки ---
+                dpg.add_theme_color(dpg.mvThemeCol_Tab, (245, 248, 250))
+                dpg.add_theme_color(dpg.mvThemeCol_TabActive, (230, 240, 250))
+                dpg.add_theme_color(dpg.mvThemeCol_TabHovered, (220, 230, 240))
+
+                # --- Заголовки и границы ---
+                dpg.add_theme_color(dpg.mvThemeCol_Border, (200, 210, 220))               # границы элементов
+                dpg.add_theme_color(dpg.mvThemeCol_Separator, (200, 210, 220))            # разделители
+
+                # --- Дополнительно для графиков (если используются внутри DPG) ---
+                #dpg.add_theme_color(dpg.mvThemeCol_PlotBg, (255, 255, 255))               # фон графика
+                dpg.add_theme_color(dpg.mvThemeCol_PlotLines, (50, 80, 120))              # линии графика
+                dpg.add_theme_color(dpg.mvThemeCol_PlotLinesHovered, (30, 60, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_PlotHistogram, (100, 150, 200))        # гистограммы
+                dpg.add_theme_color(dpg.mvThemeCol_PlotHistogramHovered, (80, 130, 180))
+
         dpg.bind_theme(global_theme)
 
         self.setup_simulation()

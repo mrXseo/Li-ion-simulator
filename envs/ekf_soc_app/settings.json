@@ -1,8 +1,8 @@
 {
-  "use_scenario": true,
-  "scenario_folder_name": "default",
+  "use_scenario": false,
+  "scenario_folder_name": "falsestart00",
   "dt": 0.1,
   "speed": 100.0,
-  "autostart": true,
+  "autostart": false,
   "duration_frames": 180000
 }

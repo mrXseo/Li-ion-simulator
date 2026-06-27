@@ -1,27 +1,28 @@
-# Simulation Report: record
-**Source file:** `record.csv`
+# Отчёт по симуляции: record
+**Исходный файл:** `record.csv`
 
-## SOC Estimation Metrics
-| Metric | Value |
-|--------|-------|
-| RMSE | 0.000172 |
-| MAE | 0.000130 |
-| Max Error | 0.018078 |
+## Метрики оценки SoC
+| Метрика | Значение (отн. ед.) | Значение (%) |
+|---------|---------------------|--------------|
+| RMSE | 0.000172 | 0.0172 % |
+| MAE  | 0.000130 | 0.0130 % |
+| Max Error | 0.018078 | 1.8078 % |
 
-## Voltage Measurement
-RMSE (True vs Measured): 0.009993 V
+## Измерение напряжения
+RMSE (истинное vs измеренное): 0.009993 В
 
-## Experiment Info
-Total frames: 863998
+## Информация об эксперименте
+Всего кадров: 863998
+Длительность: 86399.8 с
 
-## Plots
-### Voltage
-![Voltage](voltage.png)
-### State of Charge
-![SOC](soc.png)
-### SOC Error
-![SOC Error](soc_error.png)
-### Current
-![Current](current.png)
-### Temperature
-![Temperature](temperature.png)
+## Графики
+### Напряжение
+![Напряжение](voltage.png)
+### Степень заряда (первые 0% данных)
+![SoC](soc.png)
+### Ошибка SoC (первые 0% данных)
+![Ошибка SoC](soc_error.png)
+### Ток
+![Ток](current.png)
+### Температура
+![Температура](temperature.png)
